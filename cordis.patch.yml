@@ -1,0 +1,7 @@
+# dsh-headroom bundle patch
+- insert:
+    - id: dsh-headroom
+      name: "@wanyantiande/dsh-headroom"
+      config:
+        compressMode: ccr
+        prewarm: true
