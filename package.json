@@ -26,7 +26,8 @@
   },
   "files": [
     "lib",
-    "README.md"
+    "README.md",
+    "cordis.patch.yml"
   ],
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
