@@ -14,7 +14,7 @@
   "dsh": {
     "client": {
       "inject": [
-        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-store",
         "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-ui-settings"
       ],
@@ -52,7 +52,8 @@
     "@deepseek-ai/cordis": "link:../../source/current/vendor/cordis",
     "@deepseek-ai/dsh-agent": "link:../../source/current/packages/core/agent",
     "@deepseek-ai/dsh-client-locale": "link:../../source/current/packages/client/locale",
-    "@deepseek-ai/dsh-client-runtime": "link:../../source/current/packages/client/runtime",
+    "@deepseek-ai/dsh-client-store": "0.1.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-settings": "0.1.2-rc.1",
     "@deepseek-ai/dsh-client-ui-slots": "link:../../source/current/packages/client/ui-slots",
     "@deepseek-ai/dsh-compaction": "link:../../source/current/packages/compaction/compaction",
     "@deepseek-ai/dsh-compaction-basic": "link:../../source/current/packages/compaction/compaction-basic",
@@ -62,7 +63,7 @@
     "@deepseek-ai/dsh-token-meter": "link:../../source/current/packages/llm/token-meter",
     "@deepseek-ai/dsh-tools": "link:../../source/current/packages/core/tools",
     "@deepseek-ai/schemastery": "link:../../source/current/vendor/schemastery",
-    "@types/node": "link:../../source/current/node_modules/@types/node",
+    "@types/node": "^22.20.1",
     "@types/react": "~18.3.1",
     "jsdom": "^30.0.1",
     "lightningcss": "^1.32.0",
