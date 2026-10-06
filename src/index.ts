@@ -2,11 +2,11 @@
  * dsh-headroom: Headroom context compression for DeepSeek Harness.
  *
  * Mounts four pieces:
- *  1. the `headroom` settings namespace — the browser settings card and this
- *     host plugin share it; user values override the cordis composition layer;
+ *  1. live settings over the `dsh-headroom` profile entry (DSH 0.2 SettingsForms;
+ *     user values override the cordis composition layer);
  *  2. a Headroom proxy lifecycle (reuse / auto-install / spawn) that exposes
  *     `ctx.headroomClient` once the local service is healthy and restarts the
- *     service when the settings namespace changes;
+ *     service when the settings document changes;
  *  3. a HeadroomCompactionEngine registered as `ctx.compaction`, taking over
  *     the compaction service from compaction-basic (its entry is disabled
  *     at runtime when present);
@@ -21,15 +21,22 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { JsonValue } from '@deepseek-ai/dsh-session'
-import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
-import type { SettingsScope } from '@deepseek-ai/dsh-settings'
 import { HeadroomCompactionEngine } from './engine.ts'
 import type { HeadroomEngineConfig } from './engine.ts'
-import { DEFAULT_HEADROOM_PORT, resolveServiceConfig, startHeadroomService } from './service.ts'
+import { resolveServiceConfig, startHeadroomService } from './service.ts'
 import type { HeadroomServiceConfig } from './service.ts'
 import { installResultCompression, resolveResultCompression } from './result-compressor.ts'
 import type { ResultCompressionConfig } from './result-compressor.ts'
 import { installHeadroomCommand } from './command.ts'
+import {
+  createHeadroomLiveScope,
+  HEADROOM_SETTINGS_NS,
+  installHeadroomSettingsPresentation,
+  type HeadroomLiveScope,
+} from './settings-scope.ts'
+
+export type { HeadroomSettings } from './settings-scope.ts'
+export { HEADROOM_ENTRY_ID, HEADROOM_SETTINGS_NS } from './settings-scope.ts'
 
 export const name = 'dsh-headroom'
 /** Services the plugin and its compaction engine read through the context. */
@@ -95,45 +102,6 @@ export const Config: z<Config> = z.object({
   prewarm: z.boolean(),
 })
 
-/** Settings namespace shared with the browser card. */
-// dsh 0.1.2-rc.1 removed the runtime settingsNamespace helper while keeping
-// the SettingsNamespace type. Keep the namespace literal local for compatibility.
-export const HEADROOM_SETTINGS_NS = 'headroom' as SettingsNamespace
-
-/** Fields the settings card edits; optional fields fall back to the composition layer. */
-export interface HeadroomSettings {
-  /** Headroom executable path. */
-  command?: string
-  /**
-   * Python interpreter path; when set, headroom runs as `python -m headroom`,
-   * so the user can pin the Python version that serves the proxy.
-   */
-  pythonPath?: string
-  /** uv executable path used when auto-installing headroom. */
-  uvCommand?: string
-  /** Proxy port for a spawned service. */
-  port?: number
-  /** Proxy base URL; empty reuses the port-derived default. */
-  baseUrl?: string
-  /** Auto-install headroom-ai via uv when the command is missing. */
-  autoInstall?: boolean
-  /** Tool-result compression switch; absent falls back to the composition layer. */
-  resultCompressionEnabled?: boolean
-  /** Tool-result compression threshold in characters; absent falls back to the composition layer. */
-  resultCompressionThresholdChars?: number
-}
-
-const headroomSettingsSchema = z.object({
-  command: z.string(),
-  pythonPath: z.string(),
-  uvCommand: z.string(),
-  port: z.number().step(1).min(1).max(65535),
-  baseUrl: z.string(),
-  autoInstall: z.boolean(),
-  resultCompressionEnabled: z.boolean(),
-  resultCompressionThresholdChars: z.number().step(1).min(1),
-})
-
 /** Every key BasicCompactionEngine's config validation accepts. */
 const BASIC_CONFIG_KEYS = [
   'thresholdRatio',
@@ -158,18 +126,13 @@ function engineConfig(config: Config): HeadroomEngineConfig {
   return engine
 }
 
-export function apply(ctx: Context, config: Config): void {  ctx.provide('headroomClient', undefined)
-  const scope = ctx.settings.register(HEADROOM_SETTINGS_NS, headroomSettingsSchema, {
-    base: {
-      command: config.headroom?.command ?? '',
-      pythonPath: config.headroom?.pythonPath ?? '',
-      uvCommand: config.headroom?.uvCommand ?? '',
-      port: config.headroom?.port ?? DEFAULT_HEADROOM_PORT,
-      baseUrl: config.headroom?.baseUrl ?? '',
-      autoInstall: config.headroom?.autoInstall ?? true,
-    },
-    applies: 'live',
-  })
+export function apply(ctx: Context, config: Config): void {
+  ctx.provide('headroomClient', undefined)
+
+  // DSH 0.2 removed settings.register; config lives on the cordis entry and
+  // SettingsForms.configure / describe / mutate drive the live UI.
+  installHeadroomSettingsPresentation(ctx)
+  const scope = createHeadroomLiveScope(ctx, config)
 
   installProxyLifecycle(ctx, scope, config)
 
@@ -211,7 +174,7 @@ export function apply(ctx: Context, config: Config): void {  ctx.provide('headro
  * override the composition layer, which itself defaults over the baked-in
  * policy defaults.
  */
-function liveResultConfig(scope: SettingsScope<HeadroomSettings>, config: Config): ResultCompressionConfig {
+function liveResultConfig(scope: HeadroomLiveScope, config: Config): ResultCompressionConfig {
   const base = resolveResultCompression(config.resultCompression)
   const settings = scope.get()
   return {
@@ -222,14 +185,14 @@ function liveResultConfig(scope: SettingsScope<HeadroomSettings>, config: Config
 }
 
 /**
- * Run the proxy lifecycle off the settings namespace: start once, restart on
+ * Run the proxy lifecycle off the live settings document: start once, restart on
  * every settings change, and dispose on plugin unload. Restarts are serialized
  * so an older spawn can never be killed by the newer restart that reused it,
  * and proxy ownership follows the restart that actually spawned it.
  */
 function installProxyLifecycle(
   ctx: Context,
-  scope: SettingsScope<HeadroomSettings>,
+  scope: HeadroomLiveScope,
   config: Config,
 ): void {
   ctx.effect(() => {

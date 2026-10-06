@@ -6,11 +6,11 @@
  */
 
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
-import type { SettingsScope } from '@deepseek-ai/dsh-client-ui-settings/client'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
+import type { FlatSettingsScope } from './config-form-adapter.ts'
 
-/** Settings namespace shared with the host plugin. */
-export const HEADROOM_NS = 'headroom'
+/** Profile entry id — SettingsForms / configForms key on DSH 0.2. */
+export const HEADROOM_NS = 'dsh-headroom'
 
 /** The section fields the card edits; mirrored from the host declaration. */
 export interface HeadroomSettings {
@@ -85,7 +85,7 @@ export class HeadroomCardController {
   private readonly store: SnapshotStore<HeadroomCardState>
   private readonly stopWatch: () => void
 
-  constructor(private readonly scope: SettingsScope<HeadroomSettings>) {
+  constructor(private readonly scope: FlatSettingsScope) {
     this.store = createSnapshotStore(this.projection())
     this.stopWatch = scope.subscribe(() => { this.publish() })
   }

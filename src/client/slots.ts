@@ -6,17 +6,7 @@
  * register a card without a build-time dependency on that package.
  */
 
-import type { SettingsScope, SettingsScopeSpec } from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { HeadroomKey } from './locales.ts'
-
-declare module '@deepseek-ai/cordis' {
-  interface Context {
-    /** Settings namespace binder, provided by the harness's ui-settings package. */
-    settingsScope: {
-      bind<T>(spec: SettingsScopeSpec<T>): SettingsScope<T>
-    }
-  }
-}
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface SlotMap {
@@ -29,4 +19,3 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
     'dsh-headroom': HeadroomKey
   }
 }
-

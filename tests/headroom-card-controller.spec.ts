@@ -6,21 +6,17 @@
 import { describe, expect, it, vi } from 'vitest'
 import { HeadroomCardController } from '../src/client/headroom-card-controller.ts'
 import type { HeadroomSettings } from '../src/client/headroom-card-controller.ts'
-import type { SettingsScope } from '@deepseek-ai/dsh-client-runtime/client'
+import type { FlatSettingsScope } from '../src/client/config-form-adapter.ts'
 
-/** 最小 SettingsScope stub:内存值 + set/unset + 订阅。 */
-function stubScope(initial: HeadroomSettings = {}): SettingsScope<HeadroomSettings> {
+/** Minimal flat scope stub: in-memory value + set/unset + subscribe. */
+function stubScope(initial: HeadroomSettings = {}): FlatSettingsScope {
   let value: HeadroomSettings | undefined = { ...initial }
   const listeners = new Set<() => void>()
   return {
     getSnapshot: () => ({
       status: 'ready',
       value,
-      base: null,
-      user: value,
-      revision: 1,
       writable: true,
-      mode: 'host',
     }),
     subscribe: (listener) => {
       listeners.add(listener)
@@ -33,7 +29,7 @@ function stubScope(initial: HeadroomSettings = {}): SettingsScope<HeadroomSettin
       value = { ...value }
       delete (value as Record<string, unknown>)[field]
     },
-  } as SettingsScope<HeadroomSettings>
+  }
 }
 
 function snapshot(controller: HeadroomCardController): ReturnType<HeadroomCardController['inject']> {

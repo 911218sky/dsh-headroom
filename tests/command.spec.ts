@@ -1,7 +1,6 @@
 /**
  * `/headroom` command semantics: argument parsing (show / set / unset), value
- * coercion by key kind, and host-side settings writes that bypass the browser
- * card's harness exposure allowlist.
+ * coercion by key kind, and host-side settings writes through the live scope.
  */
 
 import { describe, expect, it, vi } from 'vitest'
@@ -9,27 +8,19 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { HeadroomCommandScope } from '../src/command.ts'
 import { executeHeadroomCommand, parseHeadroomCommand } from '../src/command.ts'
 
-const NS = 'headroom' as const
+const NS = 'dsh-headroom' as const
 
 function makeScope(initial: Record<string, unknown> = {}) {
   const value: Record<string, unknown> = { ...initial }
   return {
     get: () => ({ ...value }),
     update: vi.fn(async (patch: Record<string, unknown>) => { Object.assign(value, patch) }),
+    unset: vi.fn(async (key: string) => { delete value[key] }),
   } as unknown as HeadroomCommandScope
 }
 
-function makeCtx(userLayer: Record<string, unknown> = {}) {
-  const user: Record<string, unknown> = { ...userLayer }
-  return {
-    settings: {
-      describe: () => [{ ns: NS, user }],
-      replace: vi.fn(async (_ns: unknown, section: Record<string, unknown>) => {
-        for (const key of Object.keys(user)) delete user[key]
-        Object.assign(user, section)
-      }),
-    },
-  } as unknown as Context
+function makeCtx() {
+  return {} as unknown as Context
 }
 
 describe('parseHeadroomCommand', () => {
@@ -78,13 +69,11 @@ describe('executeHeadroomCommand', () => {
     expect(scope.update).toHaveBeenCalledWith({ port: 9000 })
   })
 
-  it('clears a key from the user layer through replace', async () => {
-    const scope = makeScope()
-    const ctx = makeCtx({ port: 9000, autoInstall: true })
-    const result = await executeHeadroomCommand(ctx, scope, NS, { kind: 'unset', key: 'port' })
+  it('clears a key through scope.unset', async () => {
+    const scope = makeScope({ port: 9000, autoInstall: true })
+    const result = await executeHeadroomCommand(makeCtx(), scope, NS, { kind: 'unset', key: 'port' })
     expect(result.kind).toBe('success')
-    const replace = ctx.settings.replace as ReturnType<typeof vi.fn>
-    expect(replace).toHaveBeenCalledWith(NS, { autoInstall: true })
+    expect(scope.unset).toHaveBeenCalledWith('port')
   })
 
   it('reports scope failures as an error result', async () => {

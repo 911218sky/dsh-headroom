@@ -2,14 +2,13 @@
  * `/headroom` human command: view or change the plugin's settings without the
  * browser card. The card depends on the harness settings-exposure allowlist,
  * which external plugins cannot extend; the command writes the same settings
- * namespace host-side through the settings service, so it works on every
- * harness version.
+ * entry host-side through SettingsForms, so it works on every harness version.
  */
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
 import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
-import type { HeadroomSettings } from './index.ts'
+import type { HeadroomSettings } from './settings-scope.ts'
 
 const USAGE = 'Usage: /headroom (no args) | /headroom set <key> <value> | /headroom unset <key>'
 
@@ -78,13 +77,14 @@ export function renderSettings(settings: HeadroomSettings): string {
 export interface HeadroomCommandScope {
   get(): HeadroomSettings
   update(patch: object): Promise<void>
+  unset(key: string): Promise<void>
 }
 
 /** Execute one parsed command against the settings service and scope. */
 export async function executeHeadroomCommand(
   ctx: Context,
   scope: HeadroomCommandScope,
-  ns: SettingsNamespace,
+  _ns: SettingsNamespace,
   command: HeadroomCommand,
 ): Promise<CommandResult> {
   try {
@@ -92,10 +92,7 @@ export async function executeHeadroomCommand(
       return { kind: 'success', text: `Current settings:\n${renderSettings(scope.get())}` }
     }
     if (command.kind === 'unset') {
-      const descriptor = ctx.settings.describe().find((entry) => entry.ns === ns)
-      const next: Record<string, unknown> = { ...(descriptor?.user ?? {}) }
-      delete next[command.key]
-      await ctx.settings.replace(ns, next)
+      await scope.unset(command.key)
       return { kind: 'success', text: `Cleared ${command.key}; the composition default applies.` }
     }
     await scope.update({ [command.key]: command.value })
