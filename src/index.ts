@@ -28,6 +28,8 @@ import type { HeadroomServiceConfig } from './service.ts'
 import { installResultCompression, resolveResultCompression } from './result-compressor.ts'
 import type { ResultCompressionConfig } from './result-compressor.ts'
 import { installHeadroomCommand } from './command.ts'
+import { createProxyLifecycle } from './proxy-lifecycle.ts'
+import { emptyProxyStatus, type HeadroomProxyStatus } from './proxy-status.ts'
 import {
   createHeadroomLiveScope,
   HEADROOM_SETTINGS_NS,
@@ -36,6 +38,7 @@ import {
 } from './settings-scope.ts'
 
 export type { HeadroomSettings } from './settings-scope.ts'
+export type { HeadroomProxyStatus } from './proxy-status.ts'
 export { HEADROOM_ENTRY_ID, HEADROOM_SETTINGS_NS } from './settings-scope.ts'
 
 export const name = 'dsh-headroom'
@@ -128,6 +131,7 @@ function engineConfig(config: Config): HeadroomEngineConfig {
 
 export function apply(ctx: Context, config: Config): void {
   ctx.provide('headroomClient', undefined)
+  ctx.provide('headroomProxyStatus', emptyProxyStatus())
 
   // DSH 0.2 removed settings.register; config lives on the cordis entry and
   // SettingsForms.configure / describe / mutate drive the live UI.
@@ -196,16 +200,25 @@ function installProxyLifecycle(
   config: Config,
 ): void {
   ctx.effect(() => {
-    let current: { dispose: () => void } | undefined
-    let generation = 0
-    let queue: Promise<void> = Promise.resolve()
-    let lastLaunchKey = ''
-
-    const restart = (): void => {
-      queue = queue.then(async () => {
-        const id = ++generation
+    const setStatus = (status: HeadroomProxyStatus): void => {
+      ctx.reflect.set('headroomProxyStatus', status)
+    }
+    const lifecycle = createProxyLifecycle({
+      getBaseUrl: () => {
         const settings = scope.get()
-        const launchKey = JSON.stringify({
+        return resolveServiceConfig({
+          ...config.headroom,
+          command: settings.command || undefined,
+          pythonPath: settings.pythonPath || undefined,
+          uvCommand: settings.uvCommand || undefined,
+          port: settings.port,
+          baseUrl: settings.baseUrl || undefined,
+          autoInstall: settings.autoInstall,
+        }).baseUrl
+      },
+      getLaunchKey: () => {
+        const settings = scope.get()
+        return JSON.stringify({
           command: settings.command ?? null,
           pythonPath: settings.pythonPath ?? null,
           uvCommand: settings.uvCommand ?? null,
@@ -213,14 +226,9 @@ function installProxyLifecycle(
           baseUrl: settings.baseUrl ?? null,
           autoInstall: settings.autoInstall ?? null,
         })
-        // A launch-shape change must replace the running proxy even when it
-        // is healthy (e.g. switching the Python interpreter); otherwise the
-        // reused service would keep the old interpreter forever.
-        if (launchKey !== lastLaunchKey && current !== undefined) {
-          current.dispose()
-          current = undefined
-        }
-        lastLaunchKey = launchKey
+      },
+      start: async () => {
+        const settings = scope.get()
         const service = resolveServiceConfig({
           ...config.headroom,
           command: settings.command || undefined,
@@ -230,41 +238,32 @@ function installProxyLifecycle(
           baseUrl: settings.baseUrl || undefined,
           autoInstall: settings.autoInstall,
         })
-        const started = await startHeadroomService(ctx, service)
-        if (id !== generation) {
-          started.dispose()
-          return
-        }
-        if (config.prewarm !== false && started.client !== undefined) {
-          // Warm the Kompress model so the first real compression is not
-          // skipped while the model loads (a noop there would be cached).
-          void started.client.compress(
-            [{ role: 'user', content: 'headroom prewarm' }],
-            'deepseek-chat',
-            'default',
-          ).catch(() => undefined)
-        }
-        if (started.reused) {
-          // An already-healthy proxy keeps the previous owner's dispose.
-          ctx.reflect.set('headroomClient', started.client)
-          return
-        }
-        current?.dispose()
-        ctx.reflect.set('headroomClient', started.client)
-        current = { dispose: started.dispose }
-      }).catch((error: unknown) => {
-        // A failed restart must not break later ones: keep the queue alive.
+        return startHeadroomService(ctx, service)
+      },
+      setClient: (client) => {
+        ctx.reflect.set('headroomClient', client)
+      },
+      setStatus,
+      onRestartError: (error) => {
         ctx.logger.warn('dsh-headroom: proxy restart failed: %s', message(error))
-      })
-    }
+      },
+      prewarm: (client) => {
+        if (config.prewarm === false) return
+        // Warm the Kompress model so the first real compression is not
+        // skipped while the model loads (a noop there would be cached).
+        void client.compress(
+          [{ role: 'user', content: 'headroom prewarm' }],
+          'deepseek-chat',
+          'default',
+        ).catch(() => undefined)
+      },
+    })
 
-    void restart()
-    const stopWatch = scope.watch(() => restart())
+    void lifecycle.restart()
+    const stopWatch = scope.watch(() => lifecycle.restart())
     return () => {
-      generation += 1
       stopWatch()
-      current?.dispose()
-      ctx.reflect.set('headroomClient', undefined)
+      lifecycle.dispose()
     }
   }, 'dsh-headroom: proxy lifecycle')
 }

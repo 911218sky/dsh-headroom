@@ -59,7 +59,10 @@ describe('executeHeadroomCommand', () => {
     const scope = makeScope({ port: 8787, autoInstall: true })
     const result = await executeHeadroomCommand(makeCtx(), scope, NS, { kind: 'show' })
     expect(result.kind).toBe('success')
-    expect((result as { text: string }).text).toContain('"port": 8787')
+    const text = (result as { text: string }).text
+    expect(text).toContain('"port": 8787')
+    expect(text).toContain('Proxy status:')
+    expect(text).toContain('/headroom always works')
   })
 
   it('writes a typed value host-side', async () => {

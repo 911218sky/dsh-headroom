@@ -7,6 +7,8 @@
  * /health` reports service readiness.
  */
 
+import { classifyHealthError, type HealthReason } from './proxy-status.ts'
+
 /** Compressed message list plus the proxy's token accounting. */
 export interface HeadroomCompressResponse {
   /** Compressed OpenAI-style messages. */
@@ -20,6 +22,14 @@ export interface HeadroomCompressResponse {
   ccr_hashes: string[]
 }
 
+/** Detailed /health probe result (boolean `health()` stays for callers). */
+export interface HeadroomHealthProbe {
+  ok: boolean
+  reason: HealthReason
+  httpStatus: number | null
+  detail: string | null
+}
+
 export class HeadroomClient {
   constructor(
     readonly baseUrl: string,
@@ -28,13 +38,33 @@ export class HeadroomClient {
 
   /** Whether the proxy answers /health successfully right now. */
   async health(): Promise<boolean> {
+    return (await this.probeHealth()).ok
+  }
+
+  /** Probe /health with a classified reason for diagnostics. */
+  async probeHealth(): Promise<HeadroomHealthProbe> {
     try {
       const response = await fetch(`${this.baseUrl}/health`, {
         signal: AbortSignal.timeout(2_000),
       })
-      return response.ok
-    } catch {
-      return false
+      if (response.ok) {
+        return { ok: true, reason: 'ok', httpStatus: response.status, detail: null }
+      }
+      const classified = classifyHealthError(undefined, response.status)
+      return {
+        ok: false,
+        reason: classified.reason,
+        httpStatus: response.status,
+        detail: classified.detail,
+      }
+    } catch (error) {
+      const classified = classifyHealthError(error)
+      return {
+        ok: false,
+        reason: classified.reason,
+        httpStatus: null,
+        detail: classified.detail,
+      }
     }
   }
 

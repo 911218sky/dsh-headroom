@@ -73,6 +73,8 @@ export interface HeadroomService {
   dispose: () => void
   /** True when an already-healthy proxy was reused; the caller keeps its previous dispose ownership. */
   reused: boolean
+  /** Last start/degrade reason for `/headroom` and settings diagnostics. */
+  error: string | null
 }
 
 /** One spawnable launch form: executable plus any fixed argument prefix. */
@@ -143,10 +145,16 @@ export async function startHeadroomService(
   config: HeadroomServiceConfig,
 ): Promise<HeadroomService> {
   const client = new HeadroomClient(config.baseUrl)
-  if (await client.health()) {
+  const initialProbe = await client.probeHealth()
+  if (initialProbe.ok) {
     ctx.logger.info('dsh-headroom: reusing headroom proxy at %s', config.baseUrl)
-    return { client, dispose: () => {}, reused: true }
+    return { client, dispose: () => {}, reused: true, error: null }
   }
+  ctx.logger.info(
+    'dsh-headroom: no healthy proxy at %s (%s); attempting launch',
+    config.baseUrl,
+    initialProbe.detail ?? initialProbe.reason,
+  )
 
   let launch = await resolveLaunch(ctx, config)
   if (launch === undefined && config.autoInstall) {
@@ -165,27 +173,32 @@ export async function startHeadroomService(
     } else {
       const uv = findExecutable(config.uvCommand) ?? findOnPath('uv') ?? wingetUv()
       if (uv === undefined) {
-        ctx.logger.warn(
-          'dsh-headroom: headroom not found and uv is not installed; '
-          + 'install it with `uv tool install "headroom-ai[all]"` (install uv first if needed)',
+        const error = (
+          'headroom not found and uv is not installed; '
+          + 'install it with `uv tool install "headroom-ai[all]"` (install uv first if needed)'
         )
-        return { client: undefined, dispose: () => {}, reused: false }
+        ctx.logger.warn('dsh-headroom: %s', error)
+        return { client: undefined, dispose: () => {}, reused: false, error }
       }
       ctx.logger.info('dsh-headroom: installing headroom-ai via uv (first run)…')
       try {
         await runAndWait(uv, ['tool', 'install', '--python', '3.13', 'headroom-ai[all]'], config.installTimeoutMs)
       } catch (error) {
-        ctx.logger.warn('dsh-headroom: auto-install failed: %s', errorMessage(error))
-        return { client: undefined, dispose: () => {}, reused: false }
+        const detail = `auto-install failed: ${errorMessage(error)}`
+        ctx.logger.warn('dsh-headroom: %s', detail)
+        return { client: undefined, dispose: () => {}, reused: false, error: detail }
       }
       launch = await resolveLaunch(ctx, config)
     }
   }
   if (launch === undefined) {
-    ctx.logger.warn('dsh-headroom: headroom command not found; compression disabled. '
+    const error = (
+      'headroom command not found; compression disabled. '
       + 'Install it with `uv tool install "headroom-ai[all]"`, set config.headroom.command, '
-      + 'or set config.headroom.pythonPath to a Python that has headroom-ai installed.')
-    return { client: undefined, dispose: () => {}, reused: false }
+      + 'or set config.headroom.pythonPath to a Python that has headroom-ai installed.'
+    )
+    ctx.logger.warn('dsh-headroom: %s', error)
+    return { client: undefined, dispose: () => {}, reused: false, error }
   }
 
   const child = spawn(launch.command, [...launch.prefix, 'proxy', '--port', String(config.port)], {
@@ -204,15 +217,17 @@ export async function startHeadroomService(
 
   const deadline = Date.now() + config.startTimeoutMs
   while (Date.now() < deadline) {
-    if (await client.health()) {
+    const probe = await client.probeHealth()
+    if (probe.ok) {
       ctx.logger.info('dsh-headroom: proxy ready at %s', config.baseUrl)
-      return { client, dispose: () => killProcessTree(child), reused: false }
+      return { client, dispose: () => killProcessTree(child), reused: false, error: null }
     }
     await sleep(500)
   }
-  ctx.logger.warn('dsh-headroom: proxy did not become healthy within %sms; compression disabled', config.startTimeoutMs)
+  const error = `proxy did not become healthy within ${config.startTimeoutMs}ms; compression disabled`
+  ctx.logger.warn('dsh-headroom: %s', error)
   killProcessTree(child)
-  return { client: undefined, dispose: () => {}, reused: false }
+  return { client: undefined, dispose: () => {}, reused: false, error }
 }
 
 function sleep(ms: number): Promise<void> {

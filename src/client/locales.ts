@@ -34,6 +34,12 @@ export const zh = {
   save: '保存',
   saving: '保存中…',
   saveFailed: '本部署没有接受这些值，已保留供你修改。',
+  proxyStatusLabel: '代理状态',
+  proxyStatusReady: '就绪',
+  proxyStatusStarting: '启动中…',
+  proxyStatusDown: '不可用',
+  proxyStatusHint: '完整诊断请在会话中输入 /headroom。若本卡片不显示，多半是宿主 WEB_SETTINGS_NAMESPACES 未放行 dsh-headroom。',
+  proxyStatusChecking: '检测中…',
 } satisfies Record<string, string>
 
 /** The dsh-headroom namespace key union. */
@@ -73,4 +79,10 @@ export const en = {
   save: 'Save',
   saving: 'Saving…',
   saveFailed: 'The deployment did not accept these values; they were left for you to correct.',
+  proxyStatusLabel: 'Proxy status',
+  proxyStatusReady: 'Ready',
+  proxyStatusStarting: 'Starting…',
+  proxyStatusDown: 'Down',
+  proxyStatusHint: 'For full diagnostics, run /headroom in a session. If this card is missing, the host WEB_SETTINGS_NAMESPACES allowlist may omit dsh-headroom.',
+  proxyStatusChecking: 'Checking…',
 } satisfies Record<HeadroomKey, string>

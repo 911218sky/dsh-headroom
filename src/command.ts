@@ -8,6 +8,8 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
 import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
+import type { HeadroomClient } from './client.ts'
+import { renderProxyStatus, type HeadroomProxyStatus } from './proxy-status.ts'
 import type { HeadroomSettings } from './settings-scope.ts'
 
 const USAGE = 'Usage: /headroom (no args) | /headroom set <key> <value> | /headroom unset <key>'
@@ -80,6 +82,63 @@ export interface HeadroomCommandScope {
   unset(key: string): Promise<void>
 }
 
+type HeadroomCommandContext = Context & {
+  headroomClient?: HeadroomClient
+  headroomProxyStatus?: HeadroomProxyStatus
+}
+
+/** Build the show payload: settings JSON plus live proxy diagnostics. */
+export async function renderHeadroomShow(
+  ctx: HeadroomCommandContext,
+  settings: HeadroomSettings,
+): Promise<string> {
+  const stored = ctx.headroomProxyStatus
+  const client = ctx.headroomClient
+  const baseUrl = stored?.baseUrl
+    || settings.baseUrl
+    || (settings.port !== undefined ? `http://127.0.0.1:${settings.port}` : '')
+  let status: HeadroomProxyStatus = stored ?? {
+    phase: client !== undefined ? 'ready' : 'down',
+    baseUrl,
+    clientPresent: client !== undefined,
+    healthy: null,
+    healthReason: null,
+    httpStatus: null,
+    lastError: null,
+    updatedAt: Date.now(),
+  }
+  if (client !== undefined) {
+    const probe = await client.probeHealth()
+    status = {
+      ...status,
+      baseUrl: client.baseUrl,
+      clientPresent: true,
+      healthy: probe.ok,
+      healthReason: probe.reason,
+      httpStatus: probe.httpStatus,
+      phase: probe.ok ? 'ready' : 'down',
+      lastError: probe.ok ? status.lastError : (probe.detail ?? status.lastError),
+      updatedAt: Date.now(),
+    }
+  } else {
+    status = {
+      ...status,
+      clientPresent: false,
+      healthy: false,
+      phase: status.phase === 'starting' ? 'starting' : 'down',
+      updatedAt: Date.now(),
+    }
+  }
+  return [
+    renderProxyStatus(status),
+    '',
+    'Current settings:',
+    renderSettings(settings),
+    '',
+    'Tip: if the settings card is missing, the host WEB_SETTINGS_NAMESPACES allowlist may omit dsh-headroom — /headroom always works.',
+  ].join('\n')
+}
+
 /** Execute one parsed command against the settings service and scope. */
 export async function executeHeadroomCommand(
   ctx: Context,
@@ -89,7 +148,8 @@ export async function executeHeadroomCommand(
 ): Promise<CommandResult> {
   try {
     if (command.kind === 'show') {
-      return { kind: 'success', text: `Current settings:\n${renderSettings(scope.get())}` }
+      const text = await renderHeadroomShow(ctx as HeadroomCommandContext, scope.get())
+      return { kind: 'success', text }
     }
     if (command.kind === 'unset') {
       await scope.unset(command.key)

@@ -66,9 +66,11 @@ node scripts/install.mjs
 在任意会话输入(agent 也会执行):
 
 ```
-/headroom                          # 查看当前生效配置
+/headroom                          # 查看代理就绪状态 + 当前生效配置
 /headroom set port 9000            # 修改配置(数字/布尔/字符串按类型解析)
 /headroom unset port               # 恢复组合层默认
+
+`/headroom`（无参数）会输出 `Proxy status`（Ready/Starting/Down、baseUrl、lastError）以及完整 settings JSON。设置卡片若可见，顶部也会探测本地 `/health`；卡片缺失时以本命令为准。
 ```
 
 可设置键:`port`、`baseUrl`、`command`、`pythonPath`、`uvCommand`、`autoInstall`、`resultCompressionEnabled`、`resultCompressionThresholdChars`。

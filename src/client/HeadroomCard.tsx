@@ -3,6 +3,7 @@
  * Checkbox — same chrome as official settings plugins, no plugin CSS.
  */
 
+import { useEffect, useState } from 'react'
 import {
   Checkbox,
   SettingsForm,
@@ -52,6 +53,75 @@ const TEXT_FIELDS: Array<{
   },
 ]
 
+type ProxyUiPhase = 'checking' | 'ready' | 'starting' | 'down'
+
+function resolveProbeUrl(state: HeadroomCardState): string {
+  const explicit = state.baseUrl.text.trim()
+  if (explicit.length > 0) return explicit.replace(/\/$/, '')
+  const portText = state.port.text.trim()
+  const port = portText.length > 0 ? Number(portText) : 8787
+  const safePort = Number.isInteger(port) && port >= 1 && port <= 65535 ? port : 8787
+  return `http://127.0.0.1:${safePort}`
+}
+
+function ProxyStatusRow({
+  state,
+  t,
+}: {
+  state: HeadroomCardState
+  t: (key: HeadroomKey) => string
+}) {
+  const [phase, setPhase] = useState<ProxyUiPhase>('checking')
+  const [detail, setDetail] = useState<string | null>(null)
+  const probeUrl = resolveProbeUrl(state)
+
+  useEffect(() => {
+    let cancelled = false
+    setPhase('checking')
+    setDetail(null)
+    void (async () => {
+      try {
+        const response = await fetch(`${probeUrl}/health`, {
+          signal: AbortSignal.timeout(2_000),
+        })
+        if (cancelled) return
+        if (response.ok) {
+          setPhase('ready')
+          setDetail(probeUrl)
+          return
+        }
+        setPhase('down')
+        setDetail(`HTTP ${response.status}`)
+      } catch (error) {
+        if (cancelled) return
+        setPhase('down')
+        setDetail(error instanceof Error ? error.message : String(error))
+      }
+    })()
+    return () => { cancelled = true }
+  }, [probeUrl, state.baseUrl.text, state.port.text])
+
+  const label = phase === 'ready'
+    ? t('proxyStatusReady')
+    : phase === 'checking'
+      ? t('proxyStatusChecking')
+      : phase === 'starting'
+        ? t('proxyStatusStarting')
+        : t('proxyStatusDown')
+
+  return (
+    <div style={{ marginBottom: 12, fontSize: 13, lineHeight: 1.45 }}>
+      <div>
+        <strong>{t('proxyStatusLabel')}:</strong>
+        {' '}
+        {label}
+        {detail !== null && detail.length > 0 ? ` — ${detail}` : ''}
+      </div>
+      <div style={{ opacity: 0.75, marginTop: 4 }}>{t('proxyStatusHint')}</div>
+    </div>
+  )
+}
+
 /**
  * Render the Headroom settings card.
  * @param props - locale copy, the card snapshot, and its form actions.
@@ -76,6 +146,8 @@ export function HeadroomCard(props: HeadroomCardProps) {
       onSave={props.save}
       onDiscard={props.discard}
     >
+      <ProxyStatusRow state={state} t={t} />
+
       {TEXT_FIELDS.map(({ field, label, hint, invalid, numeric, placeholder }) => (
         <SettingsValueField
           key={field}
