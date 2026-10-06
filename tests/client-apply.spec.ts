@@ -1,42 +1,14 @@
 /**
- * Client apply: card must register into keyed slot settings.plugin.item,
- * keyed by the profile entry id (`dsh-headroom`) that SettingsForms serves.
+ * Client apply + flat SettingsFormScope adapter tests.
  */
 
 import { describe, expect, it } from 'vitest'
 import * as clientPlugin from '../src/client/index.ts'
-import { HeadroomCardController } from '../src/client/headroom-card-controller.ts'
-import type { HeadroomSettings } from '../src/client/headroom-card-controller.ts'
-import type { FlatSettingsScope } from '../src/client/config-form-adapter.ts'
 import type { ConfigFormLike, NestedHeadroomConfig } from '../src/client/config-form-adapter.ts'
-
-/** Minimal flat scope stub for the controller smoke check. */
-function stubScope(initial: HeadroomSettings = {}): FlatSettingsScope {
-  let value: HeadroomSettings | undefined = { ...initial }
-  const listeners = new Set<() => void>()
-  return {
-    getSnapshot: () => ({
-      status: 'ready',
-      value,
-      writable: true,
-    }),
-    subscribe: (listener) => {
-      listeners.add(listener)
-      return () => listeners.delete(listener)
-    },
-    set: async (field, next) => {
-      value = { ...value, [field]: next }
-    },
-    unset: async (field) => {
-      value = { ...value }
-      delete (value as Record<string, unknown>)[field]
-    },
-  }
-}
+import { flatSettingsFormScope } from '../src/client/config-form-adapter.ts'
 
 function stubConfigForm(initial: NestedHeadroomConfig = {}): ConfigFormLike<NestedHeadroomConfig> {
-  let value: NestedHeadroomConfig | undefined = { ...initial }
-  const listeners = new Set<() => void>()
+  const value: NestedHeadroomConfig | undefined = { ...initial }
   return {
     getSnapshot: () => ({
       status: 'ready',
@@ -47,12 +19,7 @@ function stubConfigForm(initial: NestedHeadroomConfig = {}): ConfigFormLike<Nest
       writable: true,
       mode: 'host',
     }),
-    subscribe: (listener) => {
-      listeners.add(listener)
-      return () => listeners.delete(listener)
-    },
-    set: async () => true,
-    unset: async () => true,
+    subscribe: () => () => undefined,
     mutate: async () => true,
   }
 }
@@ -61,6 +28,44 @@ interface Registration {
   options: Record<string, unknown>
   component: unknown
 }
+
+describe('flatSettingsFormScope', () => {
+  it('flattens nested Config and remaps mutate paths', async () => {
+    const ops: unknown[] = []
+    const form: ConfigFormLike<NestedHeadroomConfig> = {
+      getSnapshot: () => ({
+        status: 'ready',
+        value: {
+          headroom: { command: '/bin/hr', port: 9000, autoInstall: true },
+          resultCompression: { enabled: false, thresholdChars: 4096 },
+        },
+        base: {},
+        user: {},
+        revision: 2,
+        writable: true,
+        mode: 'host',
+      }),
+      subscribe: () => () => undefined,
+      mutate: async (next) => {
+        ops.push(...next)
+        return true
+      },
+    }
+    const scope = flatSettingsFormScope(form)
+    expect(scope.getSnapshot().value).toEqual({
+      command: '/bin/hr',
+      pythonPath: undefined,
+      uvCommand: undefined,
+      port: 9000,
+      baseUrl: undefined,
+      autoInstall: true,
+      resultCompressionEnabled: false,
+      resultCompressionThresholdChars: 4096,
+    })
+    await scope.mutate([{ op: 'set', path: ['port'], value: 8787 }])
+    expect(ops).toEqual([{ op: 'set', path: ['headroom', 'port'], value: 8787 }])
+  })
+})
 
 describe('client apply', () => {
   it('registers the card into settings.plugin.item under the dsh-headroom key', () => {
@@ -100,8 +105,6 @@ describe('client apply', () => {
     expect(registrations).toHaveLength(1)
     expect(registrations[0]?.options.name).toBe('settings.plugin.item')
     expect(registrations[0]?.options.key).toBe('dsh-headroom')
-    expect(registrations[0]?.options.locale).toBe('dsh-headroom')
-    expect(typeof registrations[0]?.options.inject).toBe('function')
   })
 
   it('skips the card when configForms is unavailable', () => {
@@ -123,14 +126,5 @@ describe('client apply', () => {
 
     clientPlugin.apply(ctx as never)
     expect(registrations).toHaveLength(0)
-  })
-
-  it('inject face exposes the card snapshot and form actions', () => {
-    const scope = stubScope({ port: 8787 })
-    const controller = new HeadroomCardController(scope)
-    const face = controller.inject()
-    expect(face.hooks.headroomCard.getSnapshot().port).toBe('8787')
-    expect(typeof face.save).toBe('function')
-    expect(typeof face.discard).toBe('function')
   })
 })

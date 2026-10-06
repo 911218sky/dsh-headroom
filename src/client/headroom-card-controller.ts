@@ -1,213 +1,118 @@
 /**
- * Form controller for the Headroom settings card: stages field drafts and
- * writes them through the settings scope only on save. Mirrors the harness's
- * CardForm pattern (draft staging, presence-marked overrides, host read-back)
- * without importing the internal ui-settings-plugins form machinery.
+ * Settings card controller built on DSH SettingsFormModel — same pattern as
+ * @deepseek-ai/dsh-client-ui-settings-shell. No custom CSS or hand-rolled
+ * draft/save state.
  */
 
+import {
+  SettingsFormModel,
+  settingsNumberField,
+  settingsTextField,
+  type SettingsFieldSpec,
+  type SettingsFormShell,
+  type SettingsFieldState,
+} from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
-import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
-import type { FlatSettingsScope } from './config-form-adapter.ts'
+import type { FlatSettingsFormScope } from './config-form-adapter.ts'
 
 /** Profile entry id — SettingsForms / configForms key on DSH 0.2. */
 export const HEADROOM_NS = 'dsh-headroom'
 
-/** The section fields the card edits; mirrored from the host declaration. */
-export interface HeadroomSettings {
-  command?: string
-  pythonPath?: string
-  uvCommand?: string
-  port?: number
-  baseUrl?: string
-  autoInstall?: boolean
-  resultCompressionEnabled?: boolean
-  resultCompressionThresholdChars?: number
+/** Boolean field as draft text for SettingsFormModel (no built-in boolean helper). */
+function settingsBooleanField(field: string): SettingsFieldSpec {
+  return {
+    field,
+    format: (value) => (value === true ? 'true' : value === false ? 'false' : ''),
+    parse: (text) => {
+      const trimmed = text.trim()
+      if (trimmed === '') return { kind: 'clear' }
+      if (trimmed === 'true') return { kind: 'set', value: true }
+      if (trimmed === 'false') return { kind: 'set', value: false }
+      return undefined
+    },
+  }
 }
 
-/** What the card renders. */
-export interface HeadroomCardState {
-  /** False while the namespace is not served to this client; the card renders nothing. */
-  available: boolean
-  /** Whether the Host document accepts writes. */
-  writable: boolean
-  /** Whether the form holds edits a save would write. */
-  dirty: boolean
-  /** Whether any staged draft is invalid, which blocks the save. */
-  invalid: boolean
-  /** Whether a save is crossing the wire. */
-  saving: boolean
-  /** Whether the last save did not land as staged. */
-  failed: boolean
-  command: string
-  pythonPath: string
-  uvCommand: string
-  port: string
-  baseUrl: string
-  autoInstall: boolean
-  resultCompressionEnabled: boolean
-  thresholdChars: string
-  thresholdInvalid: boolean
+/** Port must be an integer in 1–65535 (schema default sits on the Host). */
+function settingsPortField(): SettingsFieldSpec {
+  return {
+    field: 'port',
+    format: (value) => (typeof value === 'number' ? String(value) : ''),
+    parse: (text) => {
+      const trimmed = text.trim()
+      if (trimmed === '') return { kind: 'clear' }
+      const parsed = Number(trimmed)
+      if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) return undefined
+      return { kind: 'set', value: parsed }
+    },
+  }
 }
 
-/** Editable text fields of the card. */
-export type HeadroomTextField = 'command' | 'pythonPath' | 'uvCommand' | 'port' | 'baseUrl' | 'thresholdChars'
+const FIELD_SPECS: SettingsFieldSpec[] = [
+  settingsTextField('command'),
+  settingsTextField('pythonPath'),
+  settingsTextField('uvCommand'),
+  settingsPortField(),
+  settingsTextField('baseUrl'),
+  settingsBooleanField('autoInstall'),
+  settingsBooleanField('resultCompressionEnabled'),
+  settingsNumberField('resultCompressionThresholdChars'),
+]
 
-/** The registration-side face the card's slot entry injects. */
+/** What the card renders through the snapshot store. */
+export interface HeadroomCardState extends SettingsFormShell {
+  command: SettingsFieldState
+  pythonPath: SettingsFieldState
+  uvCommand: SettingsFieldState
+  port: SettingsFieldState
+  baseUrl: SettingsFieldState
+  autoInstall: SettingsFieldState
+  resultCompressionEnabled: SettingsFieldState
+  resultCompressionThresholdChars: SettingsFieldState
+}
+
+/** Slot inject face for the settings.plugin.item registration. */
 export interface HeadroomCardFace {
   hooks: {
-    /** Card snapshot bound by the renderer as useHeadroomCard. */
     headroomCard: SnapshotStore<HeadroomCardState>
   }
-  /** Stage one text field's draft. */
-  edit: (field: HeadroomTextField, text: string) => void
-  /** Stage the auto-install switch's opposite state. */
-  toggleAutoInstall: () => void
-  /** Stage the tool-result compression switch's opposite state. */
-  toggleResultCompression: () => void
-  /** Write every staged edit, then re-seed from what the Host accepted. */
+  edit: (field: string, text: string) => void
+  resetField: (field: string) => void
   save: () => void
-  /** Drop every staged edit. */
   discard: () => void
 }
 
-function textValue(value: unknown): string {
-  return typeof value === 'string' ? value : ''
-}
-
-function numberText(value: unknown): string {
-  return typeof value === 'number' ? String(value) : ''
-}
-
 export class HeadroomCardController {
-  private readonly staged = new Map<string, string>()
-  private saving = false
-  private failed = false
+  private readonly form: SettingsFormModel<Record<string, unknown>>
   private readonly store: SnapshotStore<HeadroomCardState>
-  private readonly stopWatch: () => void
 
-  constructor(private readonly scope: FlatSettingsScope) {
-    this.store = createSnapshotStore(this.projection())
-    this.stopWatch = scope.subscribe(() => { this.publish() })
-  }
-
-  /** Unsubscribe from the settings scope; call when the owning fiber unloads. */
-  dispose(): void {
-    this.stopWatch()
+  constructor(scope: FlatSettingsFormScope) {
+    this.form = new SettingsFormModel(scope as never, FIELD_SPECS)
+    this.store = this.form.bind(() => this.projection())
   }
 
   private projection(): HeadroomCardState {
-    const snapshot = this.scope.getSnapshot()
-    const value = snapshot.value
     return {
-      available: snapshot.status === 'ready',
-      writable: snapshot.writable,
-      dirty: this.staged.size > 0,
-      invalid: this.stagedPortInvalid() || this.stagedThresholdInvalid(),
-      saving: this.saving,
-      failed: this.failed,
-      command: this.draft('command', textValue(value?.command)),
-      pythonPath: this.draft('pythonPath', textValue(value?.pythonPath)),
-      uvCommand: this.draft('uvCommand', textValue(value?.uvCommand)),
-      port: this.draft('port', numberText(value?.port)),
-      baseUrl: this.draft('baseUrl', textValue(value?.baseUrl)),
-      autoInstall: value?.autoInstall ?? true,
-      resultCompressionEnabled: value?.resultCompressionEnabled ?? true,
-      thresholdChars: this.draft('thresholdChars', numberText(value?.resultCompressionThresholdChars)),
-      thresholdInvalid: this.stagedThresholdInvalid(),
+      ...this.form.shell(),
+      command: this.form.field('command'),
+      pythonPath: this.form.field('pythonPath'),
+      uvCommand: this.form.field('uvCommand'),
+      port: this.form.field('port'),
+      baseUrl: this.form.field('baseUrl'),
+      autoInstall: this.form.field('autoInstall'),
+      resultCompressionEnabled: this.form.field('resultCompressionEnabled'),
+      resultCompressionThresholdChars: this.form.field('resultCompressionThresholdChars'),
     }
   }
 
-  private draft(field: string, stored: string): string {
-    return this.staged.get(field) ?? stored
-  }
-
-  private stagedPortInvalid(): boolean {
-    const port = this.staged.get('port')
-    if (port === undefined) return false
-    const trimmed = port.trim()
-    if (trimmed === '') return false
-    const parsed = Number(trimmed)
-    return !Number.isInteger(parsed) || parsed < 1 || parsed > 65535
-  }
-
-  private stagedThresholdInvalid(): boolean {
-    const threshold = this.staged.get('thresholdChars')
-    if (threshold === undefined) return false
-    const trimmed = threshold.trim()
-    if (trimmed === '') return false
-    const parsed = Number(trimmed)
-    return !Number.isInteger(parsed) || parsed < 1
-  }
-
-  private publish(): void {
-    this.store.set(this.projection())
-  }
-
-  private stage(field: HeadroomTextField, text: string): void {
-    this.staged.set(field, text)
-    this.failed = false
-    this.publish()
-  }
-
-  private async commit(): Promise<void> {
-    const writes: Array<Promise<unknown>> = []
-    for (const [field, text] of this.staged) {
-      const trimmed = text.trim()
-      if (field === 'port' || field === 'thresholdChars') {
-        if (trimmed === '') writes.push(this.scope.unset(field))
-        else writes.push(this.scope.set(field, Number(trimmed)))
-      } else if (trimmed === '') {
-        writes.push(this.scope.unset(field))
-      } else {
-        writes.push(this.scope.set(field, trimmed))
-      }
-    }
-    await Promise.all(writes)
-  }
-
-  /**
-   * Write every staged edit, then re-seed from the Host's accepted state.
-   * A failed save keeps its drafts so the user can correct them.
-   */
-  private async save(): Promise<void> {
-    if (this.staged.size === 0 || this.saving || this.stagedPortInvalid() || this.stagedThresholdInvalid()) return
-    this.saving = true
-    this.failed = false
-    this.publish()
-    try {
-      await this.commit()
-      this.staged.clear()
-    } catch {
-      this.failed = true
-    } finally {
-      this.saving = false
-      this.publish()
-    }
-  }
-
-  /** Build the face the card's slot registration injects. */
   inject(): HeadroomCardFace {
     return {
       hooks: { headroomCard: this.store },
-      edit: (field, text) => this.stage(field, text),
-      toggleAutoInstall: () => {
-        this.failed = false
-        void this.scope.set('autoInstall', !(this.scope.getSnapshot().value?.autoInstall ?? true))
-      },
-      toggleResultCompression: () => {
-        this.failed = false
-        void this.scope.set(
-          'resultCompressionEnabled',
-          !(this.scope.getSnapshot().value?.resultCompressionEnabled ?? true),
-        )
-      },
-      save: () => { void this.save() },
-      discard: () => {
-        if (this.staged.size === 0 && !this.failed) return
-        this.staged.clear()
-        this.failed = false
-        this.publish()
-      },
+      ...this.form.actions(),
     }
+  }
+
+  dispose(): void {
+    this.form.dispose()
   }
 }

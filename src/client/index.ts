@@ -1,15 +1,12 @@
 /**
- * dsh-headroom, browser half: registers the Headroom settings card into the
- * settings plugin section. On DSH 0.2 the card binds the profile entry through
- * `configForms.get('dsh-headroom')` (SettingsForms); older `settingsScope`
- * / `settings.register` are gone.
+ * dsh-headroom, browser half: settings card via DSH SettingsForm primitives
+ * and configForms.get('dsh-headroom'). No plugin CSS modules.
  */
 
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
-// Type-only: pulls the locale plugin's Context merge (ctx.locale).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from './slots.ts'
-import { flatScopeFromConfigForm, type ConfigFormLike, type NestedHeadroomConfig } from './config-form-adapter.ts'
+import { flatSettingsFormScope, type ConfigFormLike, type NestedHeadroomConfig } from './config-form-adapter.ts'
 import { HeadroomCard } from './HeadroomCard.tsx'
 import { HeadroomCardController, HEADROOM_NS } from './headroom-card-controller.ts'
 import { en, zh } from './locales.ts'
@@ -41,19 +38,15 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => face.locale.register(NS, { zh, en }), 'dsh-headroom: dictionaries')
 
   const form = face.configForms?.get?.(HEADROOM_NS)
-  if (form === undefined) {
-    // Headless probes / older profiles: skip the card rather than crash load.
-    return
-  }
+  if (form === undefined) return
 
-  const controller = new HeadroomCardController(flatScopeFromConfigForm(form) as never)
+  const controller = new HeadroomCardController(flatSettingsFormScope(form))
   ctx.effect(() => () => controller.dispose(), 'dsh-headroom: card controller lifetime')
 
   face.slots.inject('settings.plugin.item', function* () {
     yield face.slots.register(
       {
         name: 'settings.plugin.item',
-        // Pair the card to the profile entry id SettingsForms serves.
         key: HEADROOM_NS,
         locale: NS,
         inject: () => controller.inject(),

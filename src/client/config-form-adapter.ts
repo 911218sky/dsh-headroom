@@ -1,6 +1,6 @@
 /**
- * Wrap a 0.2 ConfigForm (nested Config document) as the flat HeadroomSettings
- * face the card controller already speaks (getSnapshot / set / unset).
+ * Present nested plugin Config as a flat SettingsFormScope for DSH's
+ * SettingsFormModel (which mutates with path: [field] only).
  */
 
 import type { HeadroomSettings } from '../settings-scope.ts'
@@ -17,15 +17,13 @@ export interface ConfigFormLike<T> {
     mode: 'host' | 'memory'
   }
   subscribe(listener: () => void): () => void
-  set(field: string, value: unknown): Promise<boolean>
-  unset(field: string): Promise<boolean>
   mutate(
     ops: ReadonlyArray<{ op: 'set' | 'unset'; path: string[]; value?: unknown }>,
     expectedRevision?: number,
   ): Promise<boolean>
 }
 
-/** Nested plugin Config slice the form mirrors. */
+/** Nested plugin Config slice the Host form mirrors. */
 export interface NestedHeadroomConfig {
   headroom?: {
     command?: string
@@ -41,24 +39,28 @@ export interface NestedHeadroomConfig {
   }
 }
 
-/** Flat settings-scope face expected by HeadroomCardController. */
-export interface FlatSettingsScope {
+/** SettingsFormScope-shaped face SettingsFormModel expects. */
+export interface FlatSettingsFormScope {
   getSnapshot(): {
     status: 'loading' | 'ready' | 'unavailable'
     value: HeadroomSettings | undefined
+    base: unknown
+    user: unknown
+    revision: number | undefined
     writable: boolean
   }
   subscribe(listener: () => void): () => void
-  set(field: string, value: unknown): Promise<unknown>
-  unset(field: string): Promise<unknown>
+  mutate(
+    ops: ReadonlyArray<{ op: 'set' | 'unset'; path: readonly string[]; value?: unknown }>,
+    expectedRevision?: number,
+  ): Promise<boolean>
 }
 
-function pathFor(field: string): string[] {
+function nestedPath(field: string): string[] {
   switch (field) {
     case 'resultCompressionEnabled':
       return ['resultCompression', 'enabled']
     case 'resultCompressionThresholdChars':
-    case 'thresholdChars':
       return ['resultCompression', 'thresholdChars']
     case 'command':
     case 'pythonPath':
@@ -86,31 +88,39 @@ function flatten(value: NestedHeadroomConfig | undefined): HeadroomSettings | un
   }
 }
 
-/** Adapt ConfigForm&lt;nested Config&gt; into the flat scope the card controller uses. */
-export function flatScopeFromConfigForm(
+function flattenLayer(layer: unknown): unknown {
+  if (layer === undefined || layer === null || typeof layer !== 'object') return layer
+  return flatten(layer as NestedHeadroomConfig)
+}
+
+/** Adapt ConfigForm&lt;nested Config&gt; into the flat scope SettingsFormModel uses. */
+export function flatSettingsFormScope(
   form: ConfigFormLike<NestedHeadroomConfig>,
-): FlatSettingsScope {
+): FlatSettingsFormScope {
   return {
     getSnapshot() {
       const snap = form.getSnapshot()
       return {
         status: snap.status,
         value: flatten(snap.value),
+        base: flattenLayer(snap.base),
+        user: flattenLayer(snap.user),
+        revision: snap.revision,
         writable: snap.writable,
       }
     },
     subscribe(listener) {
       return form.subscribe(listener)
     },
-    set(field, value) {
-      const path = pathFor(field === 'thresholdChars' ? 'resultCompressionThresholdChars' : field)
-      if (path.length === 1) return form.set(path[0]!, value)
-      return form.mutate([{ op: 'set', path, value }])
-    },
-    unset(field) {
-      const path = pathFor(field === 'thresholdChars' ? 'resultCompressionThresholdChars' : field)
-      if (path.length === 1) return form.unset(path[0]!)
-      return form.mutate([{ op: 'unset', path }])
+    mutate(ops, expectedRevision) {
+      const nested = ops.map((op) => {
+        const field = op.path[0]
+        const path = typeof field === 'string' ? nestedPath(field) : [...op.path]
+        return op.op === 'set'
+          ? { op: 'set' as const, path, value: op.value }
+          : { op: 'unset' as const, path }
+      })
+      return form.mutate(nested, expectedRevision)
     },
   }
 }
