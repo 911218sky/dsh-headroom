@@ -17,7 +17,7 @@ import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-compaction'
 // Type-only: the `ctx.tokenMeter` Context merge for the shadow pricing.
 import type {} from '@deepseek-ai/dsh-token-meter'
-import type { Session, SessionEvent, ToolResultMessage } from '@deepseek-ai/dsh-session'
+import { SessionSeq, type Session, type SessionEvent, type ToolResultMessage } from '@deepseek-ai/dsh-session'
 import type { HeadroomClient, HeadroomCompressResponse } from './client.ts'
 import { routedModel } from './engine.ts'
 
@@ -88,12 +88,11 @@ export interface ResultCandidate {
 export function scanResultCandidates(session: Session, thresholdChars: number): ResultCandidate[] {
   const candidates: ResultCandidate[] = []
   for (const seq of [...session.surface.nodes]) {
-    const event = session.events[seq]
+    const event = session.eventAt(SessionSeq(seq))
     if (event?.type !== 'tool/result') continue
-    const result = event.data.message.content[0]
-    if (result === undefined) continue
-    if (isCompressedResult(result.content)) continue
-    if (measureText(result.content) < thresholdChars) continue
+    const content = event.data.message.content
+    if (isCompressedResult(content)) continue
+    if (measureText(content) < thresholdChars) continue
     candidates.push({ seq, event })
   }
   return candidates
@@ -151,12 +150,6 @@ function compressedText(response: HeadroomCompressResponse): string | undefined 
   return typeof content === 'string' && content.length > 0 ? content : undefined
 }
 
-/** The tool-result message's single result block, when present. */
-function resultBlock(message: ToolResultMessage): Extract<ContentBlock, { type: 'tool-result' }> | undefined {
-  const block = message.content[0]
-  return block?.type === 'tool-result' ? block : undefined
-}
-
 /**
  * Compress the over-budget tool results of one session through the proxy,
  * replacing each qualified node with a headroom-compressed text block via the
@@ -191,9 +184,7 @@ export async function compressSessionResults(
     attempted.add(seq)
     signal?.throwIfAborted()
     const message = event.data.message
-    const result = resultBlock(message)
-    if (result === undefined) continue
-    const text = result.content
+    const text = message.content
       .filter((block): block is Extract<ContentBlock, { type: 'text' }> => block.type === 'text')
       .map((block) => block.text)
       .join('\n')
@@ -203,7 +194,7 @@ export async function compressSessionResults(
     // the honest estimate, the harness default stands in before any request.
     const model = routedModel(agent) ?? 'deepseek-chat'
     const response = await client.compress(
-      [{ role: 'tool', tool_call_id: result.toolCallId, content: text }],
+      [{ role: 'tool', tool_call_id: message.toolCallId, content: text }],
       model,
     )
     signal?.throwIfAborted()
@@ -217,21 +208,24 @@ export async function compressSessionResults(
       response.tokens_after,
       response.ccr_hashes,
     )
+    // DSH 0.2: tool results are first-class `role: 'tool'` messages; content
+    // is plain text/image blocks (no nested `tool-result` wrapper).
     const replacement = freezeMessage<ToolResultMessage>({
       ...message,
-      content: [{ ...result, content: [{ type: 'text', text: replaced }] }],
+      content: [{ type: 'text', text: replaced }],
     })
+    const seqBrand = SessionSeq(seq)
     // Shadow-price protocol: the metering event and its replacement are
     // appended synchronously adjacent, so pure consumers subtract the
     // shadowed node's heuristic price without retaining per-node state.
     session.append('compaction/prune', {
-      shadowedRange: { start: seq, end: seq },
-      shadowedSeqs: [seq],
+      shadowedRange: { start: seqBrand, end: seqBrand },
+      shadowedSeqs: [seqBrand],
       shadowedTokenCount: ctx.tokenMeter.estimateMessage(message),
     })
     const replacementEvent = session.append('tool/result', { ...event.data, message: replacement }, {
-      surfaceOp: { op: 'replace', start: seq, end: seq },
-      sourceEventSeqs: [seq],
+      surfaceOp: { op: 'replace', startSeq: seqBrand, endSeq: seqBrand },
+      sourceEventSeqs: [seqBrand],
     })
     outcomes.push({
       seq,

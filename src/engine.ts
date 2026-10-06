@@ -10,13 +10,10 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { BasicCompactionEngine } from '@deepseek-ai/dsh-compaction-basic'
-import type {
-  SummarizationInput,
-  SummaryResult,
-} from '@deepseek-ai/dsh-compaction-basic/src/summarizer.ts'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { HeadroomClient } from './client.ts'
 import { renderCheckpointText, toOpenAiMessages } from './format.ts'
+import type { SummarizationInput, SummaryResult } from './summarizer-types.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
