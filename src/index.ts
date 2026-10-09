@@ -122,6 +122,7 @@ const BASIC_CONFIG_KEYS = [
 function engineConfig(config: Config): HeadroomEngineConfig {
   const engine: HeadroomEngineConfig = {}
   if (config.model !== undefined) engine.model = config.model
+  if (config.compressMode !== undefined) engine.compressMode = config.compressMode
   for (const key of BASIC_CONFIG_KEYS) {
     const value = config[key as keyof Config]
     if (value !== undefined) (engine as Record<string, unknown>)[key] = value
@@ -179,7 +180,10 @@ export function apply(ctx: Context, config: Config): void {
  * policy defaults.
  */
 function liveResultConfig(scope: HeadroomLiveScope, config: Config): ResultCompressionConfig {
-  const base = resolveResultCompression(config.resultCompression)
+  const base = resolveResultCompression({
+    ...config.resultCompression,
+    compressMode: config.compressMode ?? config.resultCompression?.compressMode,
+  })
   const settings = scope.get()
   return {
     ...base,

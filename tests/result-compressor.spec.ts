@@ -125,6 +125,7 @@ describe('resolveResultCompression', () => {
       thresholdChars: 42,
       minSavingsRatio: 0.15,
       maxPerStep: 3,
+      compressMode: 'ccr',
     })
     expect(resolveResultCompression(undefined).thresholdChars).toBe(8_192)
   })
@@ -151,6 +152,8 @@ describe('compressSessionResults', () => {
     expect(compress).toHaveBeenCalledWith(
       [{ role: 'tool', tool_call_id: 'call-1', content: 'x'.repeat(20_000) }],
       'deepseek-chat',
+      'ccr',
+      undefined,
     )
     expect(appended).toHaveLength(2)
     expect(appended[0]).toMatchObject({
@@ -214,5 +217,61 @@ describe('compressSessionResults', () => {
     const { client } = mockClient({ messages: [], tokens_after: 50 })
     await compressSessionResults(mockCtx, client, mockAgent, session, resolveResultCompression(undefined), new Set())
     expect(appended).toHaveLength(0)
+  })
+
+  it('retries a candidate after a transient proxy failure', async () => {
+    const event = toolResultEvent(5, 'x'.repeat(20_000))
+    const { session, appended } = makeSession([event])
+    const compress = vi.fn()
+      .mockRejectedValueOnce(new Error('headroom /v1/compress failed: HTTP 503'))
+      .mockResolvedValueOnce({
+        messages: [{ role: 'tool', content: 'compressed short text' }],
+        tokens_before: 1000,
+        tokens_after: 100,
+        tokens_saved: 900,
+        compression_ratio: 0.1,
+        transforms_applied: [],
+        ccr_hashes: ['ccr_retry'],
+      })
+    const client = { compress } as unknown as HeadroomClient
+    const attempted = new Set<number>()
+
+    await expect(
+      compressSessionResults(mockCtx, client, mockAgent, session, resolveResultCompression(undefined), attempted),
+    ).rejects.toThrow(/503/)
+    expect(attempted.has(5)).toBe(false)
+    expect(appended).toHaveLength(0)
+
+    const outcomes = await compressSessionResults(
+      mockCtx,
+      client,
+      mockAgent,
+      session,
+      resolveResultCompression(undefined),
+      attempted,
+    )
+    expect(compress).toHaveBeenCalledTimes(2)
+    expect(outcomes).toHaveLength(1)
+    expect(appended).toHaveLength(2)
+  })
+
+  it('forwards compressMode to the proxy client', async () => {
+    const event = toolResultEvent(5, 'x'.repeat(20_000))
+    const { session } = makeSession([event])
+    const { client, compress } = mockClient()
+    await compressSessionResults(
+      mockCtx,
+      client,
+      mockAgent,
+      session,
+      resolveResultCompression({ compressMode: 'default' }),
+      new Set(),
+    )
+    expect(compress).toHaveBeenCalledWith(
+      expect.any(Array),
+      'deepseek-chat',
+      'default',
+      undefined,
+    )
   })
 })

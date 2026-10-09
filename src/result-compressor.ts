@@ -18,8 +18,10 @@ import type {} from '@deepseek-ai/dsh-compaction'
 // Type-only: the `ctx.tokenMeter` Context merge for the shadow pricing.
 import type {} from '@deepseek-ai/dsh-token-meter'
 import { SessionSeq, type Session, type SessionEvent, type ToolResultMessage } from '@deepseek-ai/dsh-session'
-import type { HeadroomClient, HeadroomCompressResponse } from './client.ts'
+import type { CompressMode, HeadroomClient, HeadroomCompressResponse } from './client.ts'
 import { routedModel } from './engine.ts'
+
+export type { CompressMode }
 
 /** Prefix marking a headroom-compressed tool result; scanners skip these. */
 export const COMPRESSED_RESULT_PREFIX = '[compressed by headroom'
@@ -34,6 +36,8 @@ export interface ResultCompressionConfig {
   minSavingsRatio: number
   /** Most tool results compressed in one pre-step pass. */
   maxPerStep: number
+  /** Proxy compress mode; `'ccr'` writes retrieval hashes (default). */
+  compressMode: CompressMode
 }
 
 /** Default tool-result compression policy. */
@@ -42,6 +46,7 @@ export const RESULT_COMPRESSION_DEFAULTS: ResultCompressionConfig = {
   thresholdChars: 8_192,
   minSavingsRatio: 0.15,
   maxPerStep: 3,
+  compressMode: 'ccr',
 }
 
 /** Merge partial configuration over the defaults. */
@@ -53,6 +58,7 @@ export function resolveResultCompression(
     thresholdChars: config?.thresholdChars ?? RESULT_COMPRESSION_DEFAULTS.thresholdChars,
     minSavingsRatio: config?.minSavingsRatio ?? RESULT_COMPRESSION_DEFAULTS.minSavingsRatio,
     maxPerStep: config?.maxPerStep ?? RESULT_COMPRESSION_DEFAULTS.maxPerStep,
+    compressMode: config?.compressMode ?? RESULT_COMPRESSION_DEFAULTS.compressMode,
   }
 }
 
@@ -161,10 +167,12 @@ function compressedText(response: HeadroomCompressResponse): string | undefined 
  * @param agent - agent owning the session; its routed model reports to the proxy.
  * @param session - session whose current surface is rewritten.
  * @param config - resolved tool-result compression policy.
- * @param attempted - seqs already tried without a replacement; the pass skips
- * them so low-yield candidates ahead of better ones cannot starve the budget.
- * Every tried seq (replaced or not) is added, so later passes advance.
- * @param signal - cancellation; a pass aborts between candidates.
+ * @param attempted - seqs that reached a terminal no-replace outcome (empty
+ * text, unusable proxy output, or insufficient savings). The pass skips them
+ * so low-yield candidates cannot starve the budget. Transient proxy failures
+ * must not be recorded here so a later step can retry.
+ * @param signal - cancellation; a pass aborts between candidates and cancels
+ * in-flight compress requests.
  * @returns landed replacements with token accounting.
  */
 export async function compressSessionResults(
@@ -181,14 +189,16 @@ export async function compressSessionResults(
     .slice(0, config.maxPerStep)
   const outcomes: ResultCompressOutcome[] = []
   for (const { seq, event } of candidates) {
-    attempted.add(seq)
     signal?.throwIfAborted()
     const message = event.data.message
     const text = message.content
       .filter((block): block is Extract<ContentBlock, { type: 'text' }> => block.type === 'text')
       .map((block) => block.text)
       .join('\n')
-    if (text.length === 0) continue
+    if (text.length === 0) {
+      attempted.add(seq)
+      continue
+    }
 
     // The proxy requires a model for token estimation; the routed model is
     // the honest estimate, the harness default stands in before any request.
@@ -196,11 +206,19 @@ export async function compressSessionResults(
     const response = await client.compress(
       [{ role: 'tool', tool_call_id: message.toolCallId, content: text }],
       model,
+      config.compressMode,
+      signal,
     )
     signal?.throwIfAborted()
     const compressed = compressedText(response)
-    if (compressed === undefined) continue
-    if (!shouldReplace(response.tokens_before, response.tokens_after, config.minSavingsRatio)) continue
+    if (compressed === undefined) {
+      attempted.add(seq)
+      continue
+    }
+    if (!shouldReplace(response.tokens_before, response.tokens_after, config.minSavingsRatio)) {
+      attempted.add(seq)
+      continue
+    }
 
     const replaced = renderCompressedResult(
       compressed,

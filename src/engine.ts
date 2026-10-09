@@ -11,7 +11,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { BasicCompactionEngine } from '@deepseek-ai/dsh-compaction-basic'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import type { HeadroomClient } from './client.ts'
+import type { CompressMode, HeadroomClient } from './client.ts'
 import { renderCheckpointText, toOpenAiMessages } from './format.ts'
 import type { SummarizationInput, SummaryResult } from './summarizer-types.ts'
 
@@ -26,6 +26,8 @@ declare module '@deepseek-ai/cordis' {
 export interface HeadroomEngineConfig {
   /** Model id reported to the proxy for token estimation; defaults to the routed model. */
   model?: string
+  /** Proxy compress mode; `'ccr'` writes retrieval hashes (default). */
+  compressMode?: CompressMode
   /** All remaining fields are BasicCompactionConfig fields. */
   [key: string]: unknown
 }
@@ -34,11 +36,13 @@ export class HeadroomCompactionEngine extends BasicCompactionEngine {
   static inject = ['llm', 'tokenMeter', 'sessions']
 
   private readonly headroomModel: string | undefined
+  private readonly compressMode: CompressMode
 
   constructor(ctx: Context, config: HeadroomEngineConfig = {}) {
-    const { model, ...base } = config
+    const { model, compressMode, ...base } = config
     super(ctx, base)
     this.headroomModel = model
+    this.compressMode = compressMode ?? 'ccr'
   }
 
   /**
@@ -57,7 +61,12 @@ export class HeadroomCompactionEngine extends BasicCompactionEngine {
       throw new Error('dsh-headroom: headroom service is not ready; compaction deferred until the proxy responds')
     }
     const model = this.headroomModel ?? routedModel(agent)
-    const response = await client.compress(toOpenAiMessages(input), model)
+    const response = await client.compress(
+      toOpenAiMessages(input),
+      model,
+      this.compressMode,
+      signal,
+    )
     signal?.throwIfAborted()
     const text = renderCheckpointText(response)
     if (text.trim().length === 0) {

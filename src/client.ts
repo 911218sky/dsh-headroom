@@ -9,6 +9,9 @@
 
 import { classifyHealthError, type HealthReason } from './proxy-status.ts'
 
+/** Compress request mode forwarded to the Headroom proxy. */
+export type CompressMode = 'ccr' | 'default'
+
 /** Compressed message list plus the proxy's token accounting. */
 export interface HeadroomCompressResponse {
   /** Compressed OpenAI-style messages. */
@@ -74,14 +77,20 @@ export class HeadroomClient {
    * conversation's routed model, and the harness default stands in when they
    * have none. `mode: 'ccr'` makes the proxy write CCR retrieval hashes for
    * lossy replacements, so `headroom_retrieve` can restore the originals.
+   * @param signal - optional turn cancellation; combined with the request timeout.
    */
-  async compress(messages: unknown[], model = 'deepseek-chat', mode = 'ccr'): Promise<HeadroomCompressResponse> {
+  async compress(
+    messages: unknown[],
+    model = 'deepseek-chat',
+    mode = 'ccr',
+    signal?: AbortSignal,
+  ): Promise<HeadroomCompressResponse> {
     const body = { messages, model, config: { mode } }
     const response = await fetch(`${this.baseUrl}/v1/compress`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(this.timeoutMs),
+      signal: requestSignal(this.timeoutMs, signal),
     })
     if (!response.ok) {
       const detail = await response.text().catch(() => '')
@@ -91,12 +100,12 @@ export class HeadroomClient {
   }
 
   /** Restore original content from the CCR store by its hash. */
-  async retrieve(hash: string): Promise<unknown> {
+  async retrieve(hash: string, signal?: AbortSignal): Promise<unknown> {
     const response = await fetch(`${this.baseUrl}/v1/retrieve`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ hash }),
-      signal: AbortSignal.timeout(this.timeoutMs),
+      signal: requestSignal(this.timeoutMs, signal),
     })
     if (!response.ok) {
       const detail = await response.text().catch(() => '')
@@ -104,4 +113,10 @@ export class HeadroomClient {
     }
     return response.json()
   }
+}
+
+/** Timeout alone, or timeout raced with an external abort signal. */
+function requestSignal(timeoutMs: number, signal?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs)
+  return signal === undefined ? timeout : AbortSignal.any([timeout, signal])
 }
