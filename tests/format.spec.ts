@@ -1,5 +1,5 @@
 /**
- * format.ts 纯函数测试:DSH 消息 → OpenAI 线格式 → checkpoint 文本。
+ * Pure-function tests for format.ts: DSH messages → OpenAI wire shape → checkpoint text.
  */
 
 import { describe, expect, it } from 'vitest'

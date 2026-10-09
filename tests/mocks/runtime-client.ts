@@ -1,10 +1,10 @@
 /**
- * 最小 `@deepseek-ai/dsh-client-runtime/client` mock:仅提供 controller
- * 测试需要的 snapshot-store 原语。vitest alias 把浏览器闭包 bundle
- * (window.__ModuleLoader__) 替换为这个可加载的模块。
+ * Minimal `@deepseek-ai/dsh-client-runtime/client` mock: only the snapshot-store
+ * primitives the controller tests need. A vitest alias swaps the browser
+ * closure bundle (`window.__ModuleLoader__`) for this loadable module.
  */
 
-/** 可订阅的快照容器(与 runtime 的 createSnapshotStore 同语义的最小实现)。 */
+/** Subscribable snapshot container (minimal createSnapshotStore stand-in). */
 export interface SnapshotStore<T> {
   getSnapshot(): T
   set(value: T): void

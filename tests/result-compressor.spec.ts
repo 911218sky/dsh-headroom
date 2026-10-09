@@ -199,14 +199,14 @@ describe('compressSessionResults', () => {
   it('skips previously attempted candidates so later passes advance', async () => {
     const event = toolResultEvent(5, 'x'.repeat(20_000))
     const { session, appended } = makeSession([event])
-    const { client, compress } = mockClient({ tokens_after: 900 }) // 无收益
+    const { client, compress } = mockClient({ tokens_after: 900 }) // below savings threshold
     const attempted = new Set<number>()
 
     await compressSessionResults(mockCtx, client, mockAgent, session, resolveResultCompression(undefined), attempted)
     expect(appended).toHaveLength(0)
     expect(attempted.has(5)).toBe(true)
 
-    // 第二次调用跳过已尝试的 seq,不再发起代理请求
+    // Second call skips the already-attempted seq and does not hit the proxy again.
     await compressSessionResults(mockCtx, client, mockAgent, session, resolveResultCompression(undefined), attempted)
     expect(compress).toHaveBeenCalledTimes(1)
   })

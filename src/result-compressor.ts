@@ -200,8 +200,8 @@ export async function compressSessionResults(
       continue
     }
 
-    // The proxy requires a model for token estimation; the routed model is
-    // the honest estimate, the harness default stands in before any request.
+    // The proxy needs a model id for token estimation; prefer the routed
+    // model, otherwise fall back to the harness default.
     const model = routedModel(agent) ?? 'deepseek-chat'
     const response = await client.compress(
       [{ role: 'tool', tool_call_id: message.toolCallId, content: text }],

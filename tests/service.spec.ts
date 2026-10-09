@@ -1,5 +1,5 @@
 /**
- * service.ts 配置解析测试(resolveServiceConfig 纯函数)。
+ * Pure-function tests for resolveServiceConfig in service.ts.
  */
 
 import { describe, expect, it } from 'vitest'

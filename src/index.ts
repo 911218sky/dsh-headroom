@@ -325,12 +325,11 @@ export function assertValidEngineConfig(config: HeadroomEngineConfig): void {
  * plugin unloads (see {@link installTakeoverRollback}).
  */
 function installEngine(ctx: Context, config: Config): void {
-  // Validate the compaction policy BEFORE any Service registration: a rejected
+  // Validate the compaction policy before any Service registration: a rejected
   // config (e.g. `retainRatio >= thresholdRatio`) would otherwise leave a
-  // half-initialized `compaction` service behind (the Cordis Service
-  // constructor registers before `BasicCompactionEngine` resolves config),
-  // silently disabling automatic compaction. Fail loud and keep the
-  // compaction-basic backend untouched instead.
+  // half-initialized `compaction` service (Cordis registers in the constructor
+  // before `BasicCompactionEngine` resolves config), which silently disables
+  // automatic compaction. Throw early and leave compaction-basic in place.
   try {
     assertValidEngineConfig(engineConfig(config))
   } catch (error) {
@@ -447,9 +446,8 @@ async function takeOverCompaction(ctx: Context, config: Config): Promise<void> {
     compactionTakenOver = true
     ctx.logger.info('dsh-headroom: disabled compaction-basic entries and registered the headroom engine')
   } catch (error) {
-    // The takeover left compaction-basic disabled but could not mount the
-    // headroom engine: restore the original entries so the harness keeps a
-    // working compaction backend instead of a service vacuum.
+    // Takeover disabled compaction-basic but failed to mount the headroom
+    // engine: restore the original entries so compaction stays available.
     try {
       await restoreCompactionEntries(loader, compactionRestore)
       compactionRestore = []

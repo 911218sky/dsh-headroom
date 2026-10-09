@@ -76,8 +76,7 @@ export class HeadroomCompactionEngine extends BasicCompactionEngine {
       summary: [{ type: 'text', text }],
       provider: 'headroom',
       model: model ?? 'headroom-proxy',
-      // This backend never calls through the context's LLM seam; the
-      // llmStreamCall marker stays absent.
+      // This backend does not use the context LLM path, so llmStreamCall is unset.
     }
   }
 }
